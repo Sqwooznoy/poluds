@@ -20,6 +20,38 @@ let screenShareWidth = 1920;
 let screenShareHeight = 1080;
 let screenShareFps = 60;
 let ringtoneAudio = null;
+let rnnoiseModule = null;
+let rnnoiseReadyPromise = null;
+let rnnoiseAudioContext = null;
+let rnnoiseSourceNode = null;
+let rnnoiseNode = null;
+let rnnoiseDestination = null;
+let processedAudioStream = null;
+let rawAudioStream = null;
+let participantNames = {};
+
+function rememberParticipant(socketId, username) {
+    if (!socketId) return;
+    participantNames[socketId] = username || participantNames[socketId] || 'Friend';
+}
+
+function forgetParticipant(socketId) {
+    if (!socketId) return;
+    delete participantNames[socketId];
+}
+
+function getParticipantName(socketId) {
+    if (socketId && participantNames[socketId]) {
+        return participantNames[socketId];
+    }
+    if (window.currentCallDetails?.peerSocketId === socketId && window.currentCallDetails?.peerName) {
+        return window.currentCallDetails.peerName;
+    }
+    if (window.currentCallDetails?.friendName) {
+        return window.currentCallDetails.friendName;
+    }
+    return 'Friend';
+}
 // Initialize
 document.addEventListener('DOMContentLoaded', () => {
     token = localStorage.getItem('token');
@@ -120,6 +152,80 @@ function applyAudioProcessing(stream) {
     });
 }
 
+async function ensureRnnoiseReady() {
+    if (rnnoiseReadyPromise) return rnnoiseReadyPromise;
+    rnnoiseReadyPromise = (async () => {
+        const module = await import('/node_modules/simple-rnnoise-wasm/dist/rnnoise.mjs');
+        rnnoiseModule = module;
+        if (!rnnoiseAudioContext) {
+            rnnoiseAudioContext = new AudioContext({ sampleRate: 48000 });
+        }
+        if (rnnoiseAudioContext.state === 'suspended') {
+            await rnnoiseAudioContext.resume();
+        }
+        const assets = await module.rnnoise_loadAssets({
+            scriptSrc: '/node_modules/simple-rnnoise-wasm/dist/rnnoise.worklet.js',
+            moduleSrc: '/node_modules/simple-rnnoise-wasm/dist/rnnoise.wasm'
+        });
+        await module.RNNoiseNode.register(rnnoiseAudioContext, assets);
+        return module;
+    })().catch(err => {
+        rnnoiseReadyPromise = null;
+        throw err;
+    });
+    return rnnoiseReadyPromise;
+}
+
+async function applyRnnoise(stream) {
+    if (!stream || stream.getAudioTracks().length === 0) return stream;
+    rawAudioStream = stream;
+    try {
+        const module = await ensureRnnoiseReady();
+        if (rnnoiseAudioContext.state === 'suspended') {
+            await rnnoiseAudioContext.resume();
+        }
+        // Clean up previous processing graph if it exists
+        cleanupRnnoiseGraph(false);
+        
+        rnnoiseSourceNode = rnnoiseAudioContext.createMediaStreamSource(stream);
+        rnnoiseNode = new module.RNNoiseNode(rnnoiseAudioContext);
+        rnnoiseDestination = rnnoiseAudioContext.createMediaStreamDestination();
+        
+        rnnoiseSourceNode.connect(rnnoiseNode).connect(rnnoiseDestination);
+        processedAudioStream = rnnoiseDestination.stream;
+        const processedTrack = processedAudioStream.getAudioTracks()[0];
+        const newStream = new MediaStream();
+        if (processedTrack) newStream.addTrack(processedTrack);
+        stream.getVideoTracks().forEach(track => newStream.addTrack(track));
+        return newStream;
+    } catch (err) {
+        console.error('RNNoise initialization failed, falling back to raw audio:', err);
+        return stream;
+    }
+}
+
+function cleanupRnnoiseGraph(stopRaw = true) {
+    try {
+        if (rnnoiseSourceNode) rnnoiseSourceNode.disconnect();
+        if (rnnoiseNode) rnnoiseNode.disconnect();
+        if (rnnoiseDestination) rnnoiseDestination.disconnect();
+    } catch (e) {
+        console.warn('RNNoise cleanup warning:', e);
+    }
+    rnnoiseSourceNode = null;
+    rnnoiseNode = null;
+    rnnoiseDestination = null;
+    
+    if (processedAudioStream) {
+        processedAudioStream.getTracks().forEach(track => track.stop());
+        processedAudioStream = null;
+    }
+    if (stopRaw && rawAudioStream) {
+        rawAudioStream.getTracks().forEach(track => track.stop());
+        rawAudioStream = null;
+    }
+}
+
 function updateUserInfo() {
     const userAvatar = document.querySelector('.user-avatar');
     const username = document.querySelector('.username');
@@ -166,12 +272,18 @@ function connectToSocketIO() {
         // WebRTC Signaling
         socket.on('user-joined-voice', (data) => {
             console.log('User joined voice:', data);
+            if (data?.socketId) {
+                rememberParticipant(data.socketId, data.username || data.userId);
+            }
             createPeerConnection(data.socketId, true);
         });
 
         socket.on('existing-voice-users', (users) => {
             users.forEach(user => {
-                createPeerConnection(user.socketId, false);
+                if (user?.socketId) {
+                    rememberParticipant(user.socketId, user.username);
+                    createPeerConnection(user.socketId, false);
+                }
             });
         });
 
@@ -180,6 +292,7 @@ function connectToSocketIO() {
                 peerConnections[socketId].close();
                 delete peerConnections[socketId];
             }
+            forgetParticipant(socketId);
             const remoteVideo = document.getElementById(`remote-${socketId}`);
             if (remoteVideo) remoteVideo.remove();
         });
@@ -254,6 +367,7 @@ function connectToSocketIO() {
         socket.on('incoming-call', (data) => {
             const { from, type } = data;
             if (from) {
+                rememberParticipant(from.socketId, from.username);
                 showIncomingCall(from, type);
             }
         });
@@ -263,6 +377,11 @@ function connectToSocketIO() {
             stopRingtone();
             // When call is accepted, create peer connection
             document.querySelector('.call-channel-name').textContent = `Connected with ${data.from.username}`;
+            rememberParticipant(data.from.socketId, data.from.username);
+            if (window.currentCallDetails) {
+                window.currentCallDetails.peerSocketId = data.from.socketId;
+                window.currentCallDetails.peerName = data.from.username;
+            }
             
             // Create peer connection as initiator
             if (!peerConnections[data.from.socketId]) {
@@ -280,6 +399,15 @@ function connectToSocketIO() {
                 localStream.getTracks().forEach(track => track.stop());
                 localStream = null;
             }
+            cleanupRnnoiseGraph(true);
+            if (rnnoiseAudioContext) {
+                rnnoiseAudioContext.close().catch(() => {});
+                rnnoiseAudioContext = null;
+                rnnoiseReadyPromise = null;
+                rnnoiseModule = null;
+            }
+            participantNames = {};
+            window.currentCallDetails = null;
             inCall = false;
         });
         
@@ -290,6 +418,7 @@ function connectToSocketIO() {
                 peerConnections[data.from].close();
                 delete peerConnections[data.from];
             }
+            forgetParticipant(data.from);
             const remoteVideo = document.getElementById(`remote-${data.from}`);
             if (remoteVideo) remoteVideo.remove();
             
@@ -397,8 +526,8 @@ function createFriendItem(friend) {
     `;
 
     div.querySelector('.message').addEventListener('click', () => startDM(friend.id, friend.username));
-    div.querySelector('.audio-call').addEventListener('click', () => initiateCall(friend.id, 'audio'));
-    div.querySelector('.video-call').addEventListener('click', () => initiateCall(friend.id, 'video'));
+    div.querySelector('.audio-call').addEventListener('click', () => initiateCall(friend.id, 'audio', friend.username));
+    div.querySelector('.video-call').addEventListener('click', () => initiateCall(friend.id, 'video', friend.username));
     div.querySelector('.remove').addEventListener('click', () => removeFriend(friend.id));
     
     return div;
@@ -570,19 +699,20 @@ window.removeFriend = async function(friendId) {
 };
 
 // Initiate call function
-async function initiateCall(friendId, type) {
+async function initiateCall(friendId, type, friendName = '') {
     try {
         // Request only audio; ask for camera later when user toggles video
         const constraints = buildAudioConstraints();
-        localStream = await navigator.mediaDevices.getUserMedia(constraints);
-        applyAudioProcessing(localStream);
+        const rawStream = await navigator.mediaDevices.getUserMedia(constraints);
+        applyAudioProcessing(rawStream);
+        localStream = await applyRnnoise(rawStream);
         
         // Show call interface
         const callInterface = document.getElementById('callInterface');
         callInterface.classList.remove('hidden');
         
         // Update call header
-        document.querySelector('.call-channel-name').textContent = `Calling...`;
+        document.querySelector('.call-channel-name').textContent = friendName ? `Calling ${friendName}...` : `Calling...`;
         playRingtone();
         
         // Set local video
@@ -592,6 +722,7 @@ async function initiateCall(friendId, type) {
         // Store call details
         window.currentCallDetails = {
             friendId: friendId,
+            friendName: friendName,
             type: type,
             isInitiator: true,
             originalType: type
@@ -668,8 +799,9 @@ async function acceptCall(caller, type) {
     try {
         // Request only audio; ask for camera later when video is enabled
         const constraints = buildAudioConstraints();
-        localStream = await navigator.mediaDevices.getUserMedia(constraints);
-        applyAudioProcessing(localStream);
+        const rawStream = await navigator.mediaDevices.getUserMedia(constraints);
+        applyAudioProcessing(rawStream);
+        localStream = await applyRnnoise(rawStream);
         stopRingtone();
         
         // Show call interface
@@ -677,6 +809,7 @@ async function acceptCall(caller, type) {
         callInterface.classList.remove('hidden');
         
         document.querySelector('.call-channel-name').textContent = `Call with ${caller.username}`;
+        rememberParticipant(caller.socketId, caller.username);
         
         const localVideo = document.getElementById('localVideo');
         localVideo.srcObject = localStream;
@@ -684,6 +817,9 @@ async function acceptCall(caller, type) {
         // Store call details
         window.currentCallDetails = {
             peerId: caller.socketId,
+            peerSocketId: caller.socketId,
+            peerName: caller.username,
+            friendName: caller.username,
             type: type,
             isInitiator: false,
             originalType: type
@@ -1275,8 +1411,9 @@ async function initializeMedia() {
             channelCount: 1
         });
 
-        localStream = await navigator.mediaDevices.getUserMedia(constraints);
-        applyAudioProcessing(localStream);
+        const rawStream = await navigator.mediaDevices.getUserMedia(constraints);
+        applyAudioProcessing(rawStream);
+        localStream = await applyRnnoise(rawStream);
         
         const localVideo = document.getElementById('localVideo');
         localVideo.srcObject = localStream;
@@ -1311,6 +1448,13 @@ function leaveVoiceChannel(force = false) {
             localStream.getTracks().forEach(track => track.stop());
             localStream = null;
         }
+        cleanupRnnoiseGraph(true);
+        if (rnnoiseAudioContext) {
+            rnnoiseAudioContext.close().catch(() => {});
+            rnnoiseAudioContext = null;
+            rnnoiseReadyPromise = null;
+            rnnoiseModule = null;
+        }
 
         if (screenStream) {
             screenStream.getTracks().forEach(track => track.stop());
@@ -1323,6 +1467,8 @@ function leaveVoiceChannel(force = false) {
 
         Object.values(peerConnections).forEach(pc => pc.close());
         peerConnections = {};
+        participantNames = {};
+        window.currentCallDetails = null;
 
         document.querySelectorAll('.voice-channel').forEach(ch => ch.classList.remove('in-call'));
         document.getElementById('remoteParticipants').innerHTML = '';
@@ -1811,6 +1957,7 @@ function createPeerConnection(remoteSocketId, isInitiator) {
         
         let participantDiv = document.getElementById(`participant-${remoteSocketId}`);
         let remoteVideo = document.getElementById(`remote-${remoteSocketId}`);
+        const displayName = getParticipantName(remoteSocketId);
         
         if (!participantDiv) {
             participantDiv = document.createElement('div');
@@ -1825,11 +1972,16 @@ function createPeerConnection(remoteSocketId, isInitiator) {
             
             const participantName = document.createElement('div');
             participantName.className = 'participant-name';
-            participantName.textContent = 'Friend';
+            participantName.textContent = displayName;
             
             participantDiv.appendChild(remoteVideo);
             participantDiv.appendChild(participantName);
             remoteParticipants.appendChild(participantDiv);
+        } else {
+            const nameEl = participantDiv.querySelector('.participant-name');
+            if (nameEl) {
+                nameEl.textContent = displayName;
+            }
         }
         
         // Set the stream to the video element

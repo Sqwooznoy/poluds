@@ -494,6 +494,7 @@ io.on('connection', async (socket) => {
     // Join voice channel
     socket.on('join-voice-channel', (channelData) => {
         const { channelName, userId } = channelData;
+        const user = users.get(socket.id);
         
         socket.join(`voice-${channelName}`);
         
@@ -504,7 +505,9 @@ io.on('connection', async (socket) => {
         
         socket.to(`voice-${channelName}`).emit('user-joined-voice', {
             userId,
-            socketId: socket.id
+            socketId: socket.id,
+            username: user?.username,
+            avatar: user?.avatar || user?.username?.charAt(0).toUpperCase()
         });
         
         const existingUsers = Array.from(rooms.get(channelName))
