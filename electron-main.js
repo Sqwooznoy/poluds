@@ -8,7 +8,7 @@ let tray;
 const isDev = !app.isPackaged;
 
 // 👉 Укажи свои URL:
-const DEV_URL = 'http://localhost:3000';           // локальный сервер
+const DEV_URL = 'https://poluds-production.up.railway.app';           // локальный сервер
 const REMOTE_URL = 'https://poluds-production.up.railway.app';      // сюда задеплоишь backend+frontend
 
 function createMainWindow() {
@@ -20,6 +20,8 @@ function createMainWindow() {
         backgroundColor: '#202225',
         title: 'Discord Clone',
         icon: path.join(__dirname, 'assets', 'icon.png'),
+        frame: false,
+        titleBarStyle: 'hiddenInset',
         webPreferences: {
             nodeIntegration: true,
             contextIsolation: false,
