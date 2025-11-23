@@ -1927,38 +1927,49 @@ body {
     animation: fadeIn 0.2s ease;
 }
 
-/* ===== Electron titlebar ===== */
+/* ===== Кастомная шапка Discord Clone ===== */
+
+body {
+    margin: 0;
+    padding-top: 32px; /* чтобы контент не заезжал под шапку */
+}
 
 .titlebar {
-    height: 30px;
-    width: 100%;
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 32px;
     background: #202225;
     display: flex;
     align-items: center;
     justify-content: space-between;
-    -webkit-user-select: none;
-    border-bottom: 1px solid #16171a;
+    padding: 0 8px;
+    box-sizing: border-box;
+    -webkit-app-region: drag;
+    z-index: 1000;
 }
 
-.titlebar-drag-region {
-    flex: 1;
-    height: 100%;
-    -webkit-app-region: drag; /* за эту область таскаем окно */
+.titlebar-title {
+    font-size: 13px;
+    color: #b9bbbe;
+    font-family: "Segoe UI", system-ui, sans-serif;
 }
 
 .titlebar-controls {
     display: flex;
+    -webkit-app-region: no-drag;
 }
 
 .titlebar-btn {
     width: 46px;
-    height: 30px;
+    height: 32px;
     border: none;
     background: transparent;
     color: #b9bbbe;
     font-size: 14px;
-    -webkit-app-region: no-drag; /* по кнопкам можно кликать */
     cursor: pointer;
+    -webkit-app-region: no-drag;
 }
 
 .titlebar-btn:hover {
@@ -1968,49 +1979,4 @@ body {
 .titlebar-btn.close:hover {
     background: #ed4245;
     color: #fff;
-}
-/* ===== Custom Titlebar ===== */
-.titlebar {
-    height: 32px;
-    background: #202225;
-    display: flex;
-    justify-content: flex-end;
-    align-items: center;
-    -webkit-app-region: drag;
-    padding: 0 6px;
-}
-
-.titlebar-drag-region {
-    position: absolute;
-    left: 0;
-    top: 0;
-    width: calc(100% - 120px);
-    height: 32px;
-    -webkit-app-region: drag;
-}
-
-.titlebar-controls {
-    display: flex;
-    gap: 4px;
-    -webkit-app-region: no-drag;
-}
-
-.titlebar-btn {
-    width: 46px;
-    height: 32px;
-    font-size: 14px;
-    color: #fff;
-    background: transparent;
-    border: none;
-    cursor: pointer;
-    -webkit-app-region: no-drag;
-}
-
-.titlebar-btn:hover {
-    background: rgba(255,255,255,0.1);
-}
-
-.titlebar-btn.close:hover {
-    background: #d94141;
-    color: white;
 }

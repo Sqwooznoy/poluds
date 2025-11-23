@@ -12,21 +12,27 @@ const DEV_URL = 'https://poluds-production.up.railway.app';           // лок�
 const REMOTE_URL = 'https://poluds-production.up.railway.app';      // сюда задеплоишь backend+frontend
 
 function createMainWindow() {
-    mainWindow = new BrowserWindow({
-        width: 1400,
-        height: 900,
-        minWidth: 1000,
-        minHeight: 600,
-        backgroundColor: '#202225',
-        title: 'Discord Clone',
-        icon: path.join(__dirname, 'assets', 'icon.png'),
-        frame: false,
-        titleBarStyle: 'hiddenInset',
-        webPreferences: {
-            nodeIntegration: true,
-            contextIsolation: false,
-        }
-    });
+   mainWindow = new BrowserWindow({
+    width: 1400,
+    height: 900,
+    minWidth: 1000,
+    minHeight: 600,
+    backgroundColor: '#202225',
+    title: 'Discord Clone',
+    icon: path.join(__dirname, 'assets', 'icon.png'),
+
+    frame: false,             // оставляем кастомную шапку
+    titleBarStyle: 'hidden',  // или вообще убери эту строку
+    autoHideMenuBar: true,    // убрать верхнее меню File/Edit и т.п.
+
+    webPreferences: {
+        nodeIntegration: true,
+        contextIsolation: false,
+    },
+});
+
+// полностью убираем системное меню
+Menu.setApplicationMenu(null);
 
     ipcMain.on('window:minimize', () => {
     if (mainWindow) {
