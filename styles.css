@@ -1926,3 +1926,46 @@ body {
 .message-group {
     animation: fadeIn 0.2s ease;
 }
+
+/* ===== Electron titlebar ===== */
+
+.titlebar {
+    height: 30px;
+    width: 100%;
+    background: #202225;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    -webkit-user-select: none;
+    border-bottom: 1px solid #16171a;
+}
+
+.titlebar-drag-region {
+    flex: 1;
+    height: 100%;
+    -webkit-app-region: drag; /* за эту область таскаем окно */
+}
+
+.titlebar-controls {
+    display: flex;
+}
+
+.titlebar-btn {
+    width: 46px;
+    height: 30px;
+    border: none;
+    background: transparent;
+    color: #b9bbbe;
+    font-size: 14px;
+    -webkit-app-region: no-drag; /* по кнопкам можно кликать */
+    cursor: pointer;
+}
+
+.titlebar-btn:hover {
+    background: #2f3136;
+}
+
+.titlebar-btn.close:hover {
+    background: #ed4245;
+    color: #fff;
+}

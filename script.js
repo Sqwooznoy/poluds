@@ -3790,3 +3790,33 @@ function makeInterfaceResizable(callInterface) {
     });
 }
 
+// Кнопки управления окном в Electron
+if (typeof require !== 'undefined') {
+    try {
+        const { ipcRenderer } = require('electron');
+
+        const minBtn = document.getElementById('minBtn');
+        const maxBtn = document.getElementById('maxBtn');
+        const closeBtn = document.getElementById('closeBtn');
+
+        if (minBtn) {
+            minBtn.addEventListener('click', () => {
+                ipcRenderer.send('window:minimize');
+            });
+        }
+
+        if (maxBtn) {
+            maxBtn.addEventListener('click', () => {
+                ipcRenderer.send('window:maximize');
+            });
+        }
+
+        if (closeBtn) {
+            closeBtn.addEventListener('click', () => {
+                ipcRenderer.send('window:close');
+            });
+        }
+    } catch (e) {
+        // запущено в обычном браузере – Electron недоступен, просто игнор
+    }
+}

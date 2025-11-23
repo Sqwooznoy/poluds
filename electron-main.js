@@ -28,6 +28,33 @@ function createMainWindow() {
         }
     });
 
+    ipcMain.on('window:minimize', () => {
+    if (mainWindow) {
+        mainWindow.minimize();
+    }
+});
+
+ipcMain.on('window:maximize', () => {
+    if (!mainWindow) return;
+
+    if (mainWindow.isMaximized()) {
+        mainWindow.unmaximize();
+    } else {
+        mainWindow.maximize();
+    }
+});
+
+ipcMain.on('window:close', () => {
+    if (!mainWindow) return;
+
+    // вариант 1: прячем в трей (как сейчас по крестику)
+    mainWindow.hide();
+
+    // вариант 2: полностью выходим из приложения:
+    // app.isQuiting = true;
+    // app.quit();
+});
+
     const urlToLoad = isDev ? DEV_URL : REMOTE_URL;
     mainWindow.loadURL(urlToLoad);
 
