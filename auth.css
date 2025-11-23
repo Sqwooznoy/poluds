@@ -197,3 +197,10 @@ body {
 @keyframes spin {
     to { transform: rotate(360deg); }
 }
+/* Фикс мигания логин-формы */
+.auth-container,
+.auth-box {
+    opacity: 1 !important;
+    animation: none !important;
+    transition: none !important;
+}
