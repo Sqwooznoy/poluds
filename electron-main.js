@@ -1,38 +1,47 @@
-const { app, BrowserWindow, Notification, ipcMain } = require('electron');
+const { app, BrowserWindow, Tray, Menu, ipcMain, Notification } = require('electron');
 const path = require('path');
 
 let mainWindow;
+let tray;
 
-function createWindow() {
+// true в dev-режиме, false в продакшене (.exe)
+const isDev = !app.isPackaged;
+
+// 👉 Укажи свои URL:
+const DEV_URL = 'http://localhost:3000';           // локальный сервер
+const REMOTE_URL = 'https://poluds-production.up.railway.app';      // сюда задеплоишь backend+frontend
+
+function createMainWindow() {
     mainWindow = new BrowserWindow({
         width: 1400,
         height: 900,
         minWidth: 1000,
         minHeight: 600,
+        backgroundColor: '#202225',
+        title: 'Discord Clone',
+        icon: path.join(__dirname, 'assets', 'icon.png'),
         webPreferences: {
             nodeIntegration: true,
             contextIsolation: false,
-            enableRemoteModule: true
-        },
-        icon: path.join(__dirname, 'assets', 'icon.png'),
-        frame: true,
-        titleBarStyle: 'default',
-        backgroundColor: '#36393f'
+        }
     });
 
-    // Load the app
-    mainWindow.loadURL('http://localhost:3000/login.html');
+    const urlToLoad = isDev ? DEV_URL : REMOTE_URL;
+    mainWindow.loadURL(urlToLoad);
 
-    // Open DevTools in development
-    if (process.env.NODE_ENV === 'development') {
+    if (isDev) {
         mainWindow.webContents.openDevTools();
     }
 
-    mainWindow.on('closed', () => {
-        mainWindow = null;
+    // крестик = спрятать в трей
+    mainWindow.on('close', (event) => {
+        if (!app.isQuiting) {
+            event.preventDefault();
+            mainWindow.hide();
+        }
     });
 
-    // Handle notifications
+    // уведомления из фронта
     ipcMain.on('show-notification', (event, { title, body }) => {
         if (Notification.isSupported()) {
             new Notification({
@@ -42,52 +51,65 @@ function createWindow() {
             }).show();
         }
     });
+}
 
-    // Handle minimize to tray
-    mainWindow.on('minimize', (event) => {
-        event.preventDefault();
-        mainWindow.hide();
-    });
+function createTray() {
+    const iconPath = path.join(__dirname, 'assets', 'icon.png');
+    tray = new Tray(iconPath);
 
-    mainWindow.on('close', (event) => {
-        if (!app.isQuiting) {
-            event.preventDefault();
-            mainWindow.hide();
+    const contextMenu = Menu.buildFromTemplate([
+        {
+            label: 'Открыть',
+            click: () => {
+                if (!mainWindow) createMainWindow();
+                mainWindow.show();
+            }
+        },
+        {
+            label: 'Выход',
+            click: () => {
+                app.isQuiting = true;
+                app.quit();
+            }
         }
+    ]);
+
+    tray.setToolTip('Discord Clone');
+    tray.setContextMenu(contextMenu);
+
+    // клик по трею = показать/спрятать
+    tray.on('click', () => {
+        if (mainWindow.isVisible()) mainWindow.hide();
+        else mainWindow.show();
     });
 }
 
-app.on('ready', createWindow);
+// ---- ОДНА КОПИЯ ПРИЛОЖЕНИЯ ----
+const gotTheLock = app.requestSingleInstanceLock();
 
-app.on('window-all-closed', () => {
-    if (process.platform !== 'darwin') {
-        app.quit();
-    }
-});
-
-app.on('activate', () => {
-    if (mainWindow === null) {
-        createWindow();
-    } else {
-        mainWindow.show();
-    }
-});
-
-app.on('before-quit', () => {
-    app.isQuiting = true;
-});
-
-// Auto-updater (optional)
-if (process.platform !== 'linux') {
-    const { autoUpdater } = require('electron-updater');
-    
-    autoUpdater.on('update-downloaded', () => {
-        autoUpdater.quitAndInstall();
-    });
-    
-    app.on('ready', () => {
-        if (process.env.NODE_ENV === 'production') {
-            autoUpdater.checkForUpdates();
+if (!gotTheLock) {
+    app.quit();
+} else {
+    app.on('second-instance', () => {
+        if (mainWindow) {
+            if (mainWindow.isMinimized()) mainWindow.restore();
+            mainWindow.show();
+            mainWindow.focus();
         }
     });
+
+    app.whenReady().then(() => {
+        createMainWindow();
+        createTray();
+
+        app.on('activate', () => {
+            if (BrowserWindow.getAllWindows().length === 0) createMainWindow();
+        });
+    });
 }
+
+app.on('window-all-closed', (event) => {
+    event.preventDefault(); // не закрываем полностью — остаёмся в трее
+});
+
+app.on

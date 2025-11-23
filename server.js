@@ -8,7 +8,12 @@ const multer = require('multer');
 const cors = require('cors');
 const fs = require('fs');
 
-const { initializeDatabase, userDB, messageDB, dmDB, fileDB, reactionDB, friendDB, serverDB } = require('./database');
+const { initializeDatabase, userDB, messageDB, dmDB, fileDB, reactionDB, friendDB, serverDB, groupDB } = require('./database');
+
+// Store connected users and rooms
+const users = new Map();
+const rooms = new Map();
+const activeCalls = new Map(); // socketId -> peerSocketId
 
 const app = express();
 const server = http.createServer(app);
@@ -165,6 +170,201 @@ app.post('/api/login', async (req, res) => {
         res.status(500).json({ error: 'Login failed' });
     }
 });
+
+// Helpers
+async function isGroupOwner(groupId, userId) {
+    const group = await groupDB.getGroupById(groupId);
+    return group && group.owner_id === userId;
+}
+
+async function isGroupMember(groupId, userId) {
+    const members = await groupDB.getMembers(groupId);
+    return members.some(m => m.id === userId);
+}
+
+// Group routes
+app.get('/api/groups', authenticateToken, async (req, res) => {
+    try {
+        const groups = await groupDB.getGroupsForUser(req.user.id);
+        res.json(groups);
+    } catch (error) {
+        console.error('Get groups error:', error);
+        res.status(500).json({ error: 'Failed to load groups' });
+    }
+});
+
+app.post('/api/groups', authenticateToken, async (req, res) => {
+    try {
+        const { name, memberIds } = req.body;
+        if (!name || typeof name !== 'string' || name.trim().length < 3) {
+            return res.status(400).json({ error: 'Group name too short' });
+        }
+        const group = await groupDB.createGroup(name.trim(), req.user.id);
+        const members = Array.isArray(memberIds) ? memberIds : [];
+        await groupDB.addMember(group.id, req.user.id);
+        for (const mid of members) {
+            await groupDB.addMember(group.id, mid);
+        }
+        const memberList = await groupDB.getMembers(group.id);
+        res.json({ group: { ...group, members: memberList } });
+    } catch (error) {
+        console.error('Create group error:', error);
+        res.status(500).json({ error: 'Failed to create group' });
+    }
+});
+
+app.get('/api/groups/:id/messages', authenticateToken, async (req, res) => {
+    try {
+        const messages = await groupDB.getMessages(req.params.id, 100);
+        res.json(messages);
+    } catch (error) {
+        console.error('Group messages error:', error);
+        res.status(500).json({ error: 'Failed to load group messages' });
+    }
+});
+
+app.get('/api/groups/:id/members', authenticateToken, async (req, res) => {
+    try {
+        const members = await groupDB.getMembers(req.params.id);
+        res.json(members);
+    } catch (error) {
+        console.error('Group members error:', error);
+        res.status(500).json({ error: 'Failed to load group members' });
+    }
+});
+
+app.post('/api/groups/:id/members', authenticateToken, async (req, res) => {
+    try {
+        const groupId = req.params.id;
+        const { userId } = req.body;
+        if (!await isGroupOwner(groupId, req.user.id)) {
+            return res.status(403).json({ error: 'Only owner can add members' });
+        }
+        await groupDB.addMember(groupId, userId);
+        const members = await groupDB.getMembers(groupId);
+        res.json({ members });
+    } catch (error) {
+        console.error('Add member error:', error);
+        res.status(500).json({ error: 'Failed to add member' });
+    }
+});
+
+app.delete('/api/groups/:id/members/:userId', authenticateToken, async (req, res) => {
+    try {
+        const groupId = req.params.id;
+        const targetId = parseInt(req.params.userId, 10);
+        const isOwner = await isGroupOwner(groupId, req.user.id);
+        if (!isOwner && targetId !== req.user.id) {
+            return res.status(403).json({ error: 'Not allowed' });
+        }
+        await groupDB.removeMember(groupId, targetId);
+        const members = await groupDB.getMembers(groupId);
+        res.json({ members });
+    } catch (error) {
+        console.error('Remove member error:', error);
+        res.status(500).json({ error: 'Failed to remove member' });
+    }
+});
+
+app.delete('/api/groups/:id', authenticateToken, async (req, res) => {
+    try {
+        const groupId = req.params.id;
+        if (!await isGroupOwner(groupId, req.user.id)) {
+            return res.status(403).json({ error: 'Only owner can delete group' });
+        }
+        await groupDB.deleteGroup(groupId);
+        res.sendStatus(200);
+    } catch (error) {
+        console.error('Delete group error:', error);
+        res.status(500).json({ error: 'Failed to delete group' });
+    }
+});
+
+async function handleProfileUpdate(req, res) {
+    try {
+        const { username, currentPassword, newPassword } = req.body;
+        if (!username && !newPassword) {
+            return res.status(400).json({ error: 'Nothing to update' });
+        }
+
+        const user = await userDB.findByIdWithPassword(req.user.id);
+        if (!user) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+
+        const updates = {};
+
+        if (username) {
+            if (typeof username !== 'string' || username.trim().length < 3 || username.trim().length > 20) {
+                return res.status(400).json({ error: 'Username must be 3-20 characters' });
+            }
+            const trimmed = username.trim();
+            if (trimmed !== user.username) {
+                updates.username = trimmed;
+            }
+        }
+
+        if (newPassword) {
+            if (!currentPassword || currentPassword !== user.password) {
+                return res.status(400).json({ error: 'Current password incorrect' });
+            }
+            if (newPassword.length < 6) {
+                return res.status(400).json({ error: 'New password too short' });
+            }
+            updates.password = newPassword;
+        }
+
+        if (!updates.username && !updates.password) {
+            // Nothing changed
+            const current = await userDB.findById(req.user.id);
+            return res.json({
+                user: {
+                    id: current.id,
+                    username: current.username,
+                    email: current.email,
+                    avatar: current.avatar || current.username.charAt(0).toUpperCase()
+                }
+            });
+        }
+
+        await userDB.updateProfile({ id: req.user.id, ...updates });
+
+        const updated = await userDB.findById(req.user.id);
+
+        // Update connected socket user info
+        users.forEach((u, socketId) => {
+            if (u.id === req.user.id) {
+                users.set(socketId, { ...u, username: updated.username, avatar: updated.avatar || updated.username.charAt(0).toUpperCase() });
+            }
+        });
+        io.emit('user-list-update', Array.from(users.values()));
+        io.emit('user-renamed', {
+            id: updated.id,
+            username: updated.username,
+            avatar: updated.avatar || updated.username.charAt(0).toUpperCase()
+        });
+
+        res.json({
+            user: {
+                id: updated.id,
+                username: updated.username,
+                email: updated.email,
+                avatar: updated.avatar || updated.username.charAt(0).toUpperCase()
+            }
+        });
+    } catch (error) {
+        if (error && error.message && error.message.includes('UNIQUE constraint failed: users.username')) {
+            return res.status(400).json({ error: 'Username already taken' });
+        }
+        console.error('Update profile error:', error);
+        res.status(500).json({ error: 'Failed to update profile', detail: error?.message });
+    }
+}
+
+// Update profile (username/password)
+app.patch('/api/user', authenticateToken, handleProfileUpdate);
+app.put('/api/user', authenticateToken, handleProfileUpdate);
+app.post('/api/user/update', authenticateToken, handleProfileUpdate);
 
 // Get user profile
 app.get('/api/user/profile', authenticateToken, async (req, res) => {
@@ -344,10 +544,6 @@ app.delete('/api/friends/:friendId', authenticateToken, async (req, res) => {
         res.status(500).json({ error: 'Failed to remove friend' });
     }
 });
-
-// Store connected users
-const users = new Map();
-const rooms = new Map();
 
 // Socket.IO connection handling
 io.use((socket, next) => {
@@ -562,7 +758,7 @@ io.on('connection', async (socket) => {
                     id: from.id,
                     username: from.username,
                     socketId: socket.id,
-                    avatar: from.username?.charAt(0).toUpperCase()
+                    avatar: from.avatar || from.username?.charAt(0).toUpperCase()
                 },
                 type: type
             });
@@ -581,9 +777,14 @@ io.on('connection', async (socket) => {
             from: {
                 id: from.id,
                 username: from.username,
-                socketId: socket.id
+                socketId: socket.id,
+                avatar: from.avatar || from.username?.charAt(0).toUpperCase()
             }
         });
+
+        // Track active direct call between sockets
+        activeCalls.set(socket.id, to);
+        activeCalls.set(to, socket.id);
     });
 
     socket.on('reject-call', (data) => {
@@ -614,6 +815,39 @@ io.on('connection', async (socket) => {
         if (to) {
             io.to(to).emit('call-ended', { from: socket.id });
         }
+        if (activeCalls.has(socket.id)) {
+            const peer = activeCalls.get(socket.id);
+            activeCalls.delete(socket.id);
+            activeCalls.delete(peer);
+        }
+    });
+
+    // Group messages
+    socket.on('send-group-message', async (data) => {
+        try {
+            const { groupId, message } = data;
+            if (!groupId || !message || !message.text) return;
+            const member = await isGroupMember(groupId, socket.userId);
+            if (!member) return;
+            const saved = await groupDB.addMessage(groupId, socket.userId, message.text);
+            const members = await groupDB.getMembers(groupId);
+            const payload = {
+                id: saved.id,
+                author: users.get(socket.id)?.username || 'Unknown',
+                avatar: users.get(socket.id)?.avatar || (users.get(socket.id)?.username || 'U')[0],
+                text: message.text,
+                timestamp: new Date(),
+                groupId
+            };
+            members.forEach(m => {
+                const target = Array.from(users.values()).find(u => u.id === m.id);
+                if (target) {
+                    io.to(target.socketId).emit('group-message', payload);
+                }
+            });
+        } catch (error) {
+            console.error('Group message error:', error);
+        }
     });
 
     // Handle disconnection
@@ -636,6 +870,14 @@ io.on('connection', async (socket) => {
                     io.to(`voice-${roomName}`).emit('user-left-voice', socket.id);
                 }
             });
+
+            // End direct call if exists
+            if (activeCalls.has(socket.id)) {
+                const peer = activeCalls.get(socket.id);
+                activeCalls.delete(socket.id);
+                activeCalls.delete(peer);
+                io.to(peer).emit('call-ended', { from: socket.id });
+            }
             
             users.delete(socket.id);
             io.emit('user-list-update', Array.from(users.values()));

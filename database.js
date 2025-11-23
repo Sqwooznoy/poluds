@@ -71,6 +71,41 @@ function initializeDatabase() {
             )
         `);
 
+        // Group chats
+        db.run(`
+            CREATE TABLE IF NOT EXISTS group_chats (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                owner_id INTEGER,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (owner_id) REFERENCES users(id)
+            )
+        `);
+
+        db.run(`
+            CREATE TABLE IF NOT EXISTS group_members (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                group_id INTEGER,
+                user_id INTEGER,
+                joined_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (group_id) REFERENCES group_chats(id),
+                FOREIGN KEY (user_id) REFERENCES users(id),
+                UNIQUE(group_id, user_id)
+            )
+        `);
+
+        db.run(`
+            CREATE TABLE IF NOT EXISTS group_messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                group_id INTEGER,
+                sender_id INTEGER,
+                content TEXT NOT NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (group_id) REFERENCES group_chats(id),
+                FOREIGN KEY (sender_id) REFERENCES users(id)
+            )
+        `);
+
         // File uploads table
         db.run(`
             CREATE TABLE IF NOT EXISTS file_uploads (
@@ -164,10 +199,42 @@ const userDB = {
         });
     },
 
+    findByIdWithPassword: (id) => {
+        return new Promise((resolve, reject) => {
+            const sql = 'SELECT * FROM users WHERE id = ?';
+            db.get(sql, [id], (err, row) => {
+                if (err) reject(err);
+                else resolve(row);
+            });
+        });
+    },
+
     updateStatus: (id, status) => {
         return new Promise((resolve, reject) => {
             const sql = 'UPDATE users SET status = ? WHERE id = ?';
             db.run(sql, [status, id], (err) => {
+                if (err) reject(err);
+                else resolve();
+            });
+        });
+    },
+
+    updateProfile: ({ id, username, password }) => {
+        return new Promise((resolve, reject) => {
+            const fields = [];
+            const values = [];
+            if (username) {
+                fields.push('username = ?');
+                values.push(username);
+            }
+            if (password) {
+                fields.push('password = ?');
+                values.push(password);
+            }
+            if (fields.length === 0) return reject(new Error('No fields to update'));
+            values.push(id);
+            const sql = `UPDATE users SET ${fields.join(', ')} WHERE id = ?`;
+            db.run(sql, values, function(err) {
                 if (err) reject(err);
                 else resolve();
             });
@@ -478,6 +545,119 @@ const serverDB = {
     }
 };
 
+// Group chat operations
+const groupDB = {
+    createGroup: (name, ownerId) => {
+        return new Promise((resolve, reject) => {
+            const sql = 'INSERT INTO group_chats (name, owner_id) VALUES (?, ?)';
+            db.run(sql, [name, ownerId], function(err) {
+                if (err) reject(err);
+                else resolve({ id: this.lastID, name, owner_id: ownerId });
+            });
+        });
+    },
+
+    addMember: (groupId, userId) => {
+        return new Promise((resolve, reject) => {
+            const sql = 'INSERT OR IGNORE INTO group_members (group_id, user_id) VALUES (?, ?)';
+            db.run(sql, [groupId, userId], function(err) {
+                if (err) reject(err);
+                else resolve();
+            });
+        });
+    },
+
+    getGroupsForUser: (userId) => {
+        return new Promise((resolve, reject) => {
+            const sql = `
+                SELECT g.id, g.name, g.owner_id
+                FROM group_chats g
+                JOIN group_members gm ON gm.group_id = g.id
+                WHERE gm.user_id = ?
+            `;
+            db.all(sql, [userId], (err, rows) => {
+                if (err) reject(err);
+                else resolve(rows);
+            });
+        });
+    },
+
+    addMessage: (groupId, senderId, content) => {
+        return new Promise((resolve, reject) => {
+            const sql = 'INSERT INTO group_messages (group_id, sender_id, content) VALUES (?, ?, ?)';
+            db.run(sql, [groupId, senderId, content], function(err) {
+                if (err) reject(err);
+                else resolve({ id: this.lastID, group_id: groupId, sender_id: senderId, content });
+            });
+        });
+    },
+
+    getMessages: (groupId, limit = 50) => {
+        return new Promise((resolve, reject) => {
+            const sql = `
+                SELECT gm.id, gm.content, gm.created_at, u.username, u.avatar
+                FROM group_messages gm
+                JOIN users u ON gm.sender_id = u.id
+                WHERE gm.group_id = ?
+                ORDER BY gm.created_at DESC
+                LIMIT ?
+            `;
+            db.all(sql, [groupId, limit], (err, rows) => {
+                if (err) reject(err);
+                else resolve(rows.reverse());
+            });
+        });
+    },
+
+    getMembers: (groupId) => {
+        return new Promise((resolve, reject) => {
+            const sql = `
+                SELECT u.id, u.username, u.avatar
+                FROM group_members gm
+                JOIN users u ON gm.user_id = u.id
+                WHERE gm.group_id = ?
+            `;
+            db.all(sql, [groupId], (err, rows) => {
+                if (err) reject(err);
+                else resolve(rows);
+            });
+        });
+    },
+
+    getGroupById: (groupId) => {
+        return new Promise((resolve, reject) => {
+            const sql = 'SELECT * FROM group_chats WHERE id = ?';
+            db.get(sql, [groupId], (err, row) => {
+                if (err) reject(err);
+                else resolve(row);
+            });
+        });
+    },
+
+    removeMember: (groupId, userId) => {
+        return new Promise((resolve, reject) => {
+            const sql = 'DELETE FROM group_members WHERE group_id = ? AND user_id = ?';
+            db.run(sql, [groupId, userId], (err) => {
+                if (err) reject(err);
+                else resolve();
+            });
+        });
+    },
+
+    deleteGroup: (groupId) => {
+        return new Promise((resolve, reject) => {
+            db.serialize(() => {
+                db.run('DELETE FROM group_messages WHERE group_id = ?', [groupId]);
+                db.run('DELETE FROM group_members WHERE group_id = ?', [groupId]);
+                db.run('DELETE FROM group_chats WHERE id = ?', [groupId], (err) => {
+                    if (err) reject(err);
+                    else resolve();
+                });
+            });
+        });
+    }
+};
+
 module.exports = {
     db,
     initializeDatabase,
@@ -487,5 +667,6 @@ module.exports = {
     fileDB,
     reactionDB,
     friendDB,
-    serverDB
+    serverDB,
+    groupDB
 };
