@@ -1969,3 +1969,48 @@ body {
     background: #ed4245;
     color: #fff;
 }
+/* ===== Custom Titlebar ===== */
+.titlebar {
+    height: 32px;
+    background: #202225;
+    display: flex;
+    justify-content: flex-end;
+    align-items: center;
+    -webkit-app-region: drag;
+    padding: 0 6px;
+}
+
+.titlebar-drag-region {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: calc(100% - 120px);
+    height: 32px;
+    -webkit-app-region: drag;
+}
+
+.titlebar-controls {
+    display: flex;
+    gap: 4px;
+    -webkit-app-region: no-drag;
+}
+
+.titlebar-btn {
+    width: 46px;
+    height: 32px;
+    font-size: 14px;
+    color: #fff;
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    -webkit-app-region: no-drag;
+}
+
+.titlebar-btn:hover {
+    background: rgba(255,255,255,0.1);
+}
+
+.titlebar-btn.close:hover {
+    background: #d94141;
+    color: white;
+}
